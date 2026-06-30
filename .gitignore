@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local data (your single SQLite file lives here — back it up manually)
+data/*.db
+
+# OCR debug artifacts
+*_overlay.png
+
+# OS / editor
+.DS_Store
+Thumbs.db

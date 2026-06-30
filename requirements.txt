@@ -1,0 +1,13 @@
+# Runtime dependencies. All free, all installable on Streamlit Community Cloud.
+# (The Tesseract OCR *engine* is installed separately via packages.txt.)
+streamlit>=1.30
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+rapidfuzz>=3.0
+scikit-learn>=1.3
+pytesseract>=0.3.10
+Pillow>=10.0
+
+# Dev/test only (not needed to run the app):
+# pytest>=7.4
