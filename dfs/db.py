@@ -13,8 +13,9 @@ import sqlite3
 from pathlib import Path
 
 # Default location of the single SQLite file (repo-local ./data/dfs.db).
+# db.py lives at <repo>/dfs/db.py, so parents[1] is the repo root.
 # Override with the DFS_DB_PATH environment variable to relocate it.
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "dfs.db"
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "dfs.db"
 
 
 def effective_db_path() -> Path:
