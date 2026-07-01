@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dfs import config, registry
+from dfs import config, registry, sgo
 from dfs.db import connect
 from dfs.projections import (
     REQUIRED_COLUMNS,
@@ -41,19 +41,43 @@ conn = get_conn()
 ss = st.session_state
 
 # ---------------------------------------------------------------------------
-# 1. Upload props CSV
+# 1. Get props — pull live odds (SportsGameOdds) or upload a CSV
 # ---------------------------------------------------------------------------
-st.header("1. Upload batter props")
-st.caption(
-    "Expected columns: " + ", ".join(
-        ["player", "normalized_market_key", "point", "over_prob",
-         "game", "commence_time_local", "away_team", "home_team"]
-    )
-)
+st.header("1. Get batter props")
 
-uploaded = st.file_uploader("Props CSV", type=["csv"])
-col_a, col_b = st.columns([1, 3])
-with col_a:
+st.subheader("Pull live odds (SportsGameOdds)")
+if sgo.configured():
+    st.caption("Fetches **today's** MLB games (US/Eastern), **pre-match only**, and "
+               "auto-projects batters *and* pitchers.")
+    if st.button("☁️ Pull today's MLB odds", type="primary"):
+        with st.spinner("Fetching today's odds from SportsGameOdds…"):
+            try:
+                slate = sgo.pull_slate()
+                ss["props_df"] = slate["batter_df"]
+                ss["pitchers"] = [{"name": p["name"], "proj_pts": p["proj_pts"]}
+                                  for p in slate["pitchers"]]
+                # Record each player's team (fixes empty Team columns elsewhere).
+                for nm, tm in slate["player_teams"].items():
+                    if tm:
+                        registry.upsert_player(conn, nm, team=tm)
+                n_bat = slate["batter_df"]["player"].nunique() if not slate["batter_df"].empty else 0
+                st.success(f"Pulled {slate['n_games']} games · {n_bat} batters · "
+                           f"{len(slate['pitchers'])} pitchers (auto-projected).")
+            except Exception as e:  # noqa: BLE001
+                st.error("Odds pull failed — full error below.")
+                st.exception(e)
+else:
+    st.info("Set **SGO_API_KEY** (Streamlit secrets or env var) to pull live odds. "
+            "You can also upload a CSV below.")
+
+with st.expander("…or upload a props CSV / use sample data"):
+    st.caption(
+        "Columns: " + ", ".join(
+            ["player", "normalized_market_key", "point", "over_prob",
+             "game", "commence_time_local", "away_team", "home_team"]
+        )
+    )
+    uploaded = st.file_uploader("Props CSV", type=["csv"])
     use_sample = st.button("Use sample data")
 
 if use_sample:
@@ -80,7 +104,7 @@ if props_df is not None:
 
     # Compute projections (cached on the dataframe contents would be ideal, but
     # the math is cheap, so just recompute).
-    projections = compute_projections(props_df)
+    projections = compute_projections(props_df, uplift=True)
     ss["projections"] = projections
     names = [p.player for p in projections]
 
@@ -139,8 +163,9 @@ if props_df is not None:
     # -----------------------------------------------------------------------
     # 3. Pitcher projections (manual)
     # -----------------------------------------------------------------------
-    st.header("3. Pitcher projections (manual)")
-    st.caption("Pitchers are entered by hand — no formula. They're stored per slate when you save.")
+    st.header("3. Pitcher projections")
+    st.caption("Auto-filled from SportsGameOdds when you pull odds; you can also add/edit by hand. "
+               "Stored per slate when you save.")
     if "pitchers" not in ss:
         ss["pitchers"] = []
     with st.form("add_pitcher", clear_on_submit=True):

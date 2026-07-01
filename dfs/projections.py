@@ -9,6 +9,7 @@ stat is just the sum of over_prob across all its rungs.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -36,6 +37,7 @@ class BatterProjection:
     e_hr: float
     e_rbi: float
     e_sb: float
+    e_bb: float = config.BB_RATE
     game: str | None = None
     game_time: str | None = None
     flags: list[str] = field(default_factory=list)
@@ -51,15 +53,11 @@ class BatterProjection:
             "e_hr": self.e_hr,
             "e_rbi": self.e_rbi,
             "e_sb": self.e_sb,
+            "e_bb": self.e_bb,
             "game": self.game,
             "game_time": self.game_time,
             "flags": list(self.flags),
         }
-
-
-def _sum_over(rungs: list[dict]) -> float:
-    """E[X] for a counting stat = sum of over_prob across all rungs."""
-    return float(sum(float(r["over_prob"]) for r in rungs))
 
 
 def _lowest_rung_prob(rungs: list[dict]) -> float:
@@ -69,34 +67,60 @@ def _lowest_rung_prob(rungs: list[dict]) -> float:
     return float(rungs[0]["over_prob"])
 
 
-def compute_expected_components(market_rungs: dict[str, list[dict]]) -> dict[str, float]:
-    """Compute E[R], E[1B], E[2B], E[3B], E[HR], E[RBI], E[SB] for one batter.
+def _expected(rungs: list[dict], uplift: bool = False) -> float:
+    """E[X] for a counting stat.
 
-    `market_rungs` maps a normalized_market_key to its list of rung dicts
-    (each with at least `point` and `over_prob`). Rungs are sorted ascending by
-    point here, so callers don't have to.
+    With multiple rungs (0.5, 1.5, …) this is the ladder sum Σ P(X≥k). With a
+    single 0.5 rung (all SGO offers today) it's P(X≥1); for common stats we then
+    blend toward the Poisson estimate −ln(1−p) to recover the 2+ games the single
+    line misses (config.UPLIFT_FACTOR).
+    """
+    if not rungs:
+        return 0.0
+    rungs = sorted(rungs, key=lambda r: float(r["point"]))
+    probs = [float(r["over_prob"]) for r in rungs]
+    ladder = sum(probs)
+    if uplift and len(rungs) == 1 and abs(float(rungs[0]["point"]) - 0.5) < 1e-9:
+        p = probs[0]
+        if 0.0 < p < 1.0:
+            return p + config.UPLIFT_FACTOR * (-math.log(1.0 - p) - p)
+    return ladder
+
+
+def compute_expected_components(
+    market_rungs: dict[str, list[dict]], uplift: bool = False
+) -> dict[str, float]:
+    """Compute E[R], E[1B], E[2B], E[3B], E[HR], E[RBI], E[SB], E[BB] for a batter.
+
+    `market_rungs` maps a normalized_market_key to its list of rung dicts (each
+    with `point` and `over_prob`). With `uplift=True`, common stats (R/1B/RBI)
+    that have only a single 0.5 line get the multi-hit uplift; rare stats and
+    walks always use the raw ladder.
     """
     rungs = {m: sorted(rs, key=lambda r: float(r["point"])) for m, rs in market_rungs.items()}
 
     def get(market: str) -> list[dict]:
         return rungs.get(market, [])
 
-    e_hr = _sum_over(get(config.MARKET_HR))
-    e_2b = _sum_over(get(config.MARKET_2B))
-    e_3b = _sum_over(get(config.MARKET_3B))
-    e_r = _sum_over(get(config.MARKET_R))
-    e_rbi = _sum_over(get(config.MARKET_RBI))
-    e_sb = _sum_over(get(config.MARKET_SB))
+    e_hr = _expected(get(config.MARKET_HR))
+    e_2b = _expected(get(config.MARKET_2B))
+    e_3b = _expected(get(config.MARKET_3B))
+    e_sb = _expected(get(config.MARKET_SB))
+    e_r = _expected(get(config.MARKET_R), uplift=uplift)
+    e_rbi = _expected(get(config.MARKET_RBI), uplift=uplift)
 
     # Singles: prefer a direct singles market; otherwise back out from hits.
     if config.MARKET_1B in rungs:
-        e_1b = _lowest_rung_prob(get(config.MARKET_1B))
+        e_1b = _expected(get(config.MARKET_1B), uplift=uplift)
     else:
         p1_hits = _lowest_rung_prob(get(config.MARKET_HITS))
         p1_hr = _lowest_rung_prob(get(config.MARKET_HR))
         p1_2b = _lowest_rung_prob(get(config.MARKET_2B))
         p1_3b = _lowest_rung_prob(get(config.MARKET_3B))
         e_1b = max(0.0, p1_hits - p1_hr - p1_2b - p1_3b)
+
+    # Walks: real prop if present, else the flat league baseline.
+    e_bb = _expected(get(config.MARKET_BB)) if config.MARKET_BB in rungs else config.BB_RATE
 
     return {
         "e_r": e_r,
@@ -106,11 +130,12 @@ def compute_expected_components(market_rungs: dict[str, list[dict]]) -> dict[str
         "e_hr": e_hr,
         "e_rbi": e_rbi,
         "e_sb": e_sb,
+        "e_bb": e_bb,
     }
 
 
 def project_from_components(components: dict[str, float], scoring: dict[str, float] | None = None) -> float:
-    """Apply scoring weights + flat BB/HBP baselines and round to 2 decimals."""
+    """Apply scoring weights (walks from prop, HBP flat baseline); round to 2dp."""
     s = scoring or config.DEFAULT_SCORING
     proj = (
         s["R"] * components["e_r"]
@@ -119,22 +144,49 @@ def project_from_components(components: dict[str, float], scoring: dict[str, flo
         + s["3B"] * components["e_3b"]
         + s["HR"] * components["e_hr"]
         + s["RBI"] * components["e_rbi"]
-        + s["BB"] * config.BB_RATE
+        + s["BB"] * components.get("e_bb", config.BB_RATE)
         + s["HBP"] * config.HBP_RATE
         + s["SB"] * components["e_sb"]
     )
     return round(proj, 2)
 
 
+def compute_pitcher_projection(lines: dict, scoring: dict[str, float] | None = None) -> tuple[float, dict]:
+    """Project a pitcher from his prop lines.
+
+    `lines` holds expected values from the market: {outs, k, hits, er, bb} are the
+    posted O/U lines (the market's expected value), `win_prob` the fair yes-prob.
+    Hit-batsmen use a per-inning baseline; CG/no-hitter/perfect are ~0 and omitted.
+    Returns (proj_pts, components).
+    """
+    s = scoring or config.DEFAULT_PITCHER_SCORING
+
+    def g(key: str) -> float:
+        v = lines.get(key)
+        return float(v) if v is not None else 0.0
+
+    ip = g("outs") / 3.0
+    win = g("win_prob")
+    k, hits, er, bb = g("k"), g("hits"), g("er"), g("bb")
+    hb = config.HB_RATE_PER_IP * ip
+    proj = (s["IP"] * ip + s["W"] * win + s["K"] * k + s["H"] * hits
+            + s["ER"] * er + s["BB"] * bb + s["HB"] * hb)
+    comps = {"ip": round(ip, 2), "win": round(win, 3), "k": k, "hits": hits,
+             "er": er, "bb": bb, "hb": round(hb, 3)}
+    return round(proj, 2), comps
+
+
 def compute_projections(
     df: pd.DataFrame,
     scoring: dict[str, float] | None = None,
+    uplift: bool = False,
 ) -> list[BatterProjection]:
     """Compute projections for every batter in a props DataFrame.
 
     Handles: per-(player, market) rung grouping, the ladder math, dedupe by
-    name (keep highest projection), and game-level auto-flags. Returns a list
-    sorted by projection descending.
+    name (keep highest projection), and game-level auto-flags. `uplift=True`
+    applies the multi-hit correction (the app enables it; the pure ladder is the
+    default). Returns a list sorted by projection descending.
     """
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
@@ -164,7 +216,7 @@ def compute_projections(
 
     projections: list[BatterProjection] = []
     for name, markets in grouped.items():
-        components = compute_expected_components(markets)
+        components = compute_expected_components(markets, uplift=uplift)
         proj = project_from_components(components, scoring)
         ctx = context.get(name, {})
         projections.append(

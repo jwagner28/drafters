@@ -22,8 +22,23 @@ DEFAULT_SCORING: dict[str, float] = {
 }
 
 # --- Flat baselines (no market exists for these, so we assume a league rate) -
-BB_RATE = 0.08
+BB_RATE = 0.08     # only used if there's no walk prop (SGO provides real ones)
 HBP_RATE = 0.011
+
+# --- Multi-hit uplift -------------------------------------------------------
+# SGO posts a single 0.5 line per batting stat, so the raw over_prob is P(X>=1),
+# which undercounts 2+ games for common stats. Recover a fuller expectation by
+# blending toward the Poisson estimate -ln(1-p). Applied only to common stats
+# and only when a stat has a single 0.5 rung.
+UPLIFT_FACTOR = 0.5
+UPLIFT_STATS = {"r", "1b", "rbi"}
+
+# --- Pitcher scoring (points per event; IP is per inning) -------------------
+DEFAULT_PITCHER_SCORING: dict[str, float] = {
+    "IP": 2.0, "W": 4.0, "K": 2.0, "H": -0.5, "ER": -2.0,
+    "BB": -0.5, "HB": -0.5, "CG": 2.0, "NO_HITTER": 5.0, "PERFECT": 10.0,
+}
+HB_RATE_PER_IP = 0.045   # hit-batsmen baseline per inning (no prop available)
 
 # --- Auto-flag thresholds ---------------------------------------------------
 # A game where most batters project near zero is probably already in progress
@@ -43,10 +58,11 @@ MARKET_HITS = "batter_hits"
 MARKET_R = "batter_runs_scored"
 MARKET_RBI = "batter_rbis"
 MARKET_SB = "batter_stolen_bases"
+MARKET_BB = "batter_walks"
 
 VALID_MARKETS = {
     MARKET_HR, MARKET_2B, MARKET_3B, MARKET_1B,
-    MARKET_HITS, MARKET_R, MARKET_RBI, MARKET_SB,
+    MARKET_HITS, MARKET_R, MARKET_RBI, MARKET_SB, MARKET_BB,
 }
 
 # --- Positions --------------------------------------------------------------

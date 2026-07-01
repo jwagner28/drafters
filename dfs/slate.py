@@ -72,13 +72,14 @@ def save_batter_projections(
         conn.execute(
             """
             INSERT INTO batter_projections
-                (slate_id, player_id, proj_pts, e_r, e_1b, e_2b, e_3b, e_hr, e_rbi, e_sb,
+                (slate_id, player_id, proj_pts, e_r, e_1b, e_2b, e_3b, e_hr, e_rbi, e_sb, e_bb,
                  game, game_time_et, flags_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slate_id, pid, p.proj_pts, p.e_r, p.e_1b, p.e_2b, p.e_3b, p.e_hr,
-                p.e_rbi, p.e_sb, p.game, p.game_time, json.dumps(p.flags),
+                p.e_rbi, p.e_sb, getattr(p, "e_bb", None), p.game, p.game_time,
+                json.dumps(p.flags),
             ),
         )
     conn.commit()

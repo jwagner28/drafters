@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS batter_projections (
     e_hr         REAL,
     e_rbi        REAL,
     e_sb         REAL,
+    e_bb         REAL,
     game         TEXT,
     game_time_et TEXT,
     flags_json   TEXT NOT NULL DEFAULT '[]',
@@ -182,4 +183,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     "UPDATE players SET positions_json = ? WHERE player_id = ?",
                     (json.dumps(positions), row["player_id"]),
                 )
+        conn.commit()
+
+    # Walks (E[BB]) became a real projected component when SGO walk props landed.
+    bp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(batter_projections)")}
+    if "e_bb" not in bp_cols:
+        conn.execute("ALTER TABLE batter_projections ADD COLUMN e_bb REAL")
         conn.commit()

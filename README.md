@@ -90,6 +90,29 @@ Streamlit Cloud auto-installs `requirements.txt` (Python deps) and `packages.txt
 > Community Cloud apps are public by default; you can restrict viewers in the
 > app's settings.
 
+## Live odds (SportsGameOdds)
+
+The **Projections** page can pull **today's** MLB props directly from
+[SportsGameOdds](https://sportsgameodds.com) — no CSV needed. It fetches
+current-day (US/Eastern) **pre-match** games and auto-projects **both batters
+and pitchers**:
+
+- **Batters** use the ladder method on SGO's fair (no-vig) odds, now with a real
+  **walk** prop and a **multi-hit uplift** for common stats (SGO posts a single
+  0.5 line per stat, so `P(≥1)` is nudged toward the fuller expectation).
+- **Pitchers** are auto-projected from their prop lines (outs→IP, K, ER, hits,
+  walks, win probability) against the pitcher scoring — no manual entry.
+
+Set your key as **`SGO_API_KEY`** (env var locally, or Streamlit **Secrets** on
+the cloud):
+
+```toml
+SGO_API_KEY = "your-sportsgameodds-key"
+```
+
+Then click **☁️ Pull today's MLB odds** on the Projections page. (CSV upload
+remains available as a fallback under the same section.)
+
 ## Data persistence with Turso (free)
 
 To keep your data across reboots/redeploys on the cloud, the app can store a

@@ -37,7 +37,7 @@ def test_counting_stat_expected_value_is_sum_of_rungs():
     assert comps["e_hr"] == pytest.approx(0.39)
 
 
-def test_singles_from_explicit_market_uses_lowest_rung():
+def test_singles_from_explicit_market_sums_rungs():
     rungs = {
         config.MARKET_1B: [
             {"point": 0.5, "over_prob": 0.41},
@@ -45,8 +45,8 @@ def test_singles_from_explicit_market_uses_lowest_rung():
         ]
     }
     comps = compute_expected_components(rungs)
-    # Explicit singles market -> just the P(1+) rung, NOT the sum.
-    assert comps["e_1b"] == pytest.approx(0.41)
+    # Explicit singles market with multiple rungs -> ladder sum E[1B].
+    assert comps["e_1b"] == pytest.approx(0.48)
 
 
 def test_singles_residual_when_no_singles_market():
