@@ -110,20 +110,21 @@ q = query.strip().lower()
 # ---------------------------------------------------------------------------
 # Three-column board
 # ---------------------------------------------------------------------------
-cols = st.columns(3)
+ROW_RATIO = [1, 5, 2]
+cols = st.columns(3, gap="large")
 for col, group in zip(cols, draftboard.GROUPS):
     rows = board[group]
     remaining = sum(1 for r in rows if _norm(r["Name"]) not in taken)
     with col:
         st.markdown(
-            f"<h3 style='color:{GROUP_COLORS[group]};margin:0'>{group}"
-            f" <span style='font-size:0.55em;color:#888'>{remaining} left / {len(rows)}</span></h3>",
+            f"<h3 style='color:{GROUP_COLORS[group]};margin:0 0 .35rem 0'>{group}"
+            f" <span style='font-size:0.5em;color:#888'>{remaining} left / {len(rows)}</span></h3>",
             unsafe_allow_html=True,
         )
-        head = st.columns([1, 1.6, 4.4, 1.6])
-        head[1].caption("Team")
-        head[2].caption("Player")
-        head[3].caption("Proj")
+        head = st.columns(ROW_RATIO, vertical_alignment="center")
+        head[1].caption("Player")
+        head[2].markdown("<div style='text-align:right;color:#888;font-size:0.8em'>Proj</div>",
+                         unsafe_allow_html=True)
 
         for i, r in enumerate(rows):
             key = _norm(r["Name"])
@@ -133,7 +134,7 @@ for col, group in zip(cols, draftboard.GROUPS):
             if q and q not in r["Name"].lower():
                 continue
 
-            rc = st.columns([1, 1.6, 4.4, 1.6])
+            rc = st.columns(ROW_RATIO, vertical_alignment="center")
             if rc[0].button("↺" if is_taken else "✕", key=f"tg_{group}_{i}",
                             help="Restore" if is_taken else "Mark taken"):
                 if is_taken:
@@ -142,16 +143,19 @@ for col, group in zip(cols, draftboard.GROUPS):
                     taken.add(key)
                 st.rerun()
 
-            rc[1].markdown(f"<span style='color:#888'>{r['Team']}</span>", unsafe_allow_html=True)
-            if is_taken:
-                rc[2].markdown(
-                    f"<span style='color:#bbb;text-decoration:line-through'>{r['Name']}</span>",
-                    unsafe_allow_html=True,
-                )
-                rc[3].markdown(
-                    f"<span style='color:#bbb;text-decoration:line-through'>{r['Proj']:.2f}</span>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                rc[2].markdown(f"**{r['Name']}**")
-                rc[3].markdown(f"`{r['Proj']:.2f}`")
+            team = (r.get("Team") or "").strip()
+            team_html = (f" <span style='color:#7a7f8c;font-size:0.82em'>{team}</span>"
+                         if team else "")
+            name_style = ("color:#8a8f99;text-decoration:line-through"
+                          if is_taken else "font-weight:600")
+            rc[1].markdown(
+                f"<div style='{name_style};line-height:1.25'>{r['Name']}{team_html}</div>",
+                unsafe_allow_html=True,
+            )
+            proj_style = ("color:#8a8f99;text-decoration:line-through"
+                          if is_taken else "color:#e6e6e6")
+            rc[2].markdown(
+                f"<div style='text-align:right;white-space:nowrap;{proj_style};"
+                f"font-variant-numeric:tabular-nums'>{r['Proj']:.2f}</div>",
+                unsafe_allow_html=True,
+            )

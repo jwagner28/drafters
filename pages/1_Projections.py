@@ -87,38 +87,54 @@ if props_df is not None:
     # -----------------------------------------------------------------------
     # 2. Resolve unknown positions
     # -----------------------------------------------------------------------
-    st.header("2. Assign positions for new players")
+    st.header("2. Assign / edit positions")
     # Ensure registry rows exist so we have stable ids; then find ones missing a position.
     slate_mod.ensure_players(conn, names)
     pending = slate_mod.players_needing_position(conn, names)
 
-    if not pending:
-        st.success("All players already have positions in the registry. ✅")
-    else:
+    if pending:
         st.warning(
-            f"{len(pending)} player(s) need a position. Pick **one or more** of "
-            "IF / OF / P (a flex bat is IF+OF; Ohtani is IF+P). Stored forever."
+            f"{len(pending)} player(s) still need a position. Tick **IF / OF / P** below "
+            "(a flex bat is IF+OF; Ohtani is IF+P), then **Save**. Stored forever."
         )
-        with st.form("assign_positions"):
-            assignments: dict[str, list[str]] = {}
-            for name in pending:
-                cols = st.columns([3, 3])
-                cols[0].markdown(f"**{name}**")
-                assignments[name] = cols[1].multiselect(
-                    f"Positions for {name}",
-                    options=config.ASSIGNABLE_POSITIONS,
-                    key=f"pos_{name}",
-                    label_visibility="collapsed",
-                )
-            submitted = st.form_submit_button("Save positions")
-        if submitted:
-            saved = 0
-            for name, positions in assignments.items():
-                if positions:
-                    registry.assign_positions(conn, name, positions)
-                    saved += 1
-            st.success(f"Saved positions for {saved} player(s).")
-            st.rerun()
+    else:
+        st.success("All players have positions. ✅ You can still edit any of them below.")
+    st.caption("Edit here anytime — if you mis-assign someone or a player changes position, "
+               "just retick and save.")
+
+    only_unassigned = st.checkbox("Show only players needing a position", value=bool(pending))
+    grid_names = pending if (only_unassigned and pending) else names
+
+    def _pos_row(name: str) -> dict:
+        row = registry.get_player_by_name(conn, name)
+        pos = registry.get_positions(row) if row else []
+        return {"Player": name, "IF": "IF" in pos, "OF": "OF" in pos, "P": "P" in pos}
+
+    pos_df = pd.DataFrame([_pos_row(n) for n in grid_names])
+    edited_pos = st.data_editor(
+        pos_df,
+        column_config={
+            "Player": st.column_config.TextColumn("Player", disabled=True),
+            "IF": st.column_config.CheckboxColumn("IF"),
+            "OF": st.column_config.CheckboxColumn("OF"),
+            "P": st.column_config.CheckboxColumn("P"),
+        },
+        hide_index=True,
+        use_container_width=True,
+        height=360,
+        key=f"pos_grid_{only_unassigned}",
+    )
+    if st.button("💾 Save positions"):
+        changed = 0
+        for r in edited_pos.to_dict("records"):
+            groups = [g for g in ("IF", "OF", "P") if r[g]]
+            existing = registry.get_player_by_name(conn, r["Player"])
+            current = registry.get_positions(existing) if existing else []
+            if set(groups) != set(current):
+                registry.assign_positions(conn, r["Player"], groups)
+                changed += 1
+        st.success(f"Updated positions for {changed} player(s).")
+        st.rerun()
 
     # -----------------------------------------------------------------------
     # 3. Pitcher projections (manual)
