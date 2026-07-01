@@ -11,6 +11,7 @@ import datetime as _dt
 
 import streamlit as st
 
+from dfs import cloudsync
 from dfs.db import effective_db_path
 
 st.set_page_config(page_title="MLB DFS Engine", page_icon="⚾", layout="wide")
@@ -42,6 +43,31 @@ db_path = effective_db_path()
 st.write(f"SQLite file: `{db_path}`")
 st.write("All your data is this one file. Set the `DFS_DB_PATH` environment "
          "variable to relocate it.")
+
+# --- Cloud persistence (Turso) ---------------------------------------------
+if cloudsync.configured():
+    st.success("☁️ **Cloud persistence is ON** (Turso). Your data is restored on "
+               "startup and auto-saved in the background, so it survives reboots/redeploys.")
+    cc = st.columns(3)
+    if cc[0].button("☁️ Save to cloud now"):
+        st.success("Saved to cloud." if cloudsync.force_push(db_path) else "Nothing to save.")
+    if cc[1].button("⬇️ Restore from cloud"):
+        if cloudsync.force_pull(db_path):
+            st.cache_resource.clear()
+            st.success("Restored from cloud. Reloading…")
+            st.rerun()
+        else:
+            st.info("No cloud backup found yet.")
+    if cc[2].button("🔌 Test connection"):
+        info = cloudsync.status(db_path)
+        if info["error"]:
+            st.error(f"Cloud error: {info['error']}")
+        else:
+            st.info(f"Connected. Cloud backup holds {info['cloud_bytes']} bytes.")
+else:
+    st.info("☁️ **Cloud persistence is OFF.** On Streamlit Cloud, data is wiped on "
+            "reboot/redeploy. To keep it for free, set up **Turso** — see the README "
+            "*Data persistence* section. (Running locally, your data already persists.)")
 
 with st.expander("💾 Backup & restore  (important on Streamlit Cloud)"):
     st.caption(

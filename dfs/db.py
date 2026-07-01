@@ -137,6 +137,12 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     """
     path = Path(db_path) if db_path is not None else effective_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    # If Turso cloud persistence is configured, restore the DB from the cloud
+    # before opening it, and start a background auto-save (both no-ops when not
+    # configured or, for the restore, when the file already exists).
+    from . import cloudsync
+    cloudsync.pull_once(path)
+    cloudsync.start_autosync(path)
     # check_same_thread=False: Streamlit caches one connection across its worker
     # threads. Safe here — single local user, and writes are short/serialized.
     conn = sqlite3.connect(str(path), check_same_thread=False)

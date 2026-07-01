@@ -85,11 +85,39 @@ Streamlit Cloud auto-installs `requirements.txt` (Python deps) and `packages.txt
 (the free **Tesseract** OCR engine), so screenshot OCR works there too.
 
 > ⚠️ **Data persistence:** Streamlit Cloud's filesystem is **ephemeral** — the
-> single SQLite file (`data/dfs.db`) survives while the app is running but is
-> **wiped on reboot or redeploy**. That's fine for trying it out, but for a tool
-> you rely on, run it **locally** (your data persists on disk) or add an
-> export/import step. Also note free Community Cloud apps are public by default;
-> you can restrict viewers in the app's settings.
+> single SQLite file (`data/dfs.db`) is **wiped on reboot or redeploy**. Set up
+> free **Turso** persistence (below) so your data survives. Also note free
+> Community Cloud apps are public by default; you can restrict viewers in the
+> app's settings.
+
+## Data persistence with Turso (free)
+
+To keep your data across reboots/redeploys on the cloud, the app can store a
+copy of its SQLite database in a **free [Turso](https://turso.tech) database**
+and sync automatically: it **restores** on startup and **auto-saves** in the
+background. Everything else keeps using local SQLite, so it's transparent.
+
+**One-time setup:**
+
+1. Sign up at [turso.tech](https://turso.tech) (free; GitHub login).
+2. Create a **database** (any name, e.g. `drafters`).
+3. Copy its **URL** (looks like `libsql://drafters-yourorg.turso.io`) and create
+   a **database token** (Turso dashboard → your DB → *Create Token*, or
+   `turso db tokens create <db>` with the CLI).
+4. On Streamlit Cloud: your app → **⋮ → Settings → Secrets**, and add:
+   ```toml
+   TURSO_DATABASE_URL = "libsql://drafters-yourorg.turso.io"
+   TURSO_AUTH_TOKEN = "your-token-here"
+   ```
+   Save — the app restarts and the Home page shows **☁️ Cloud persistence is ON**.
+
+That's it. The Home page also has **Save to cloud now**, **Restore from cloud**,
+and **Test connection** buttons.
+
+> **Locally**, your data already persists on disk, so Turso is optional. If you
+> *do* want your laptop and the cloud app to share data, set the same two values
+> as environment variables (`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`) before
+> running `streamlit run app.py`.
 
 ## Run the tests
 
