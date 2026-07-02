@@ -9,7 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-SOURCE_FLAG = {"dnp": "⛔ DNP", "batter_fallback": "🔁 bat", "pitcher": "", "batter": ""}
+# No DNP badge — a player without a projection in the slate just shows 0; check
+# the site's lineup for actual scratches.
+SOURCE_FLAG = {"dnp": "", "batter_fallback": "🔁 bat", "pitcher": "", "batter": ""}
 
 
 def render_leaderboard(data: dict) -> None:
@@ -37,7 +39,6 @@ def render_leaderboard(data: dict) -> None:
             "Floor": s["floor"],
             "Pitch": s["pitching"],
             "Hit": s["hitting"],
-            "DNP": s["dnp"],
             "_leader": e["entry_id"] == leader_id,
             "_me": e["is_me"],
         })
@@ -58,7 +59,7 @@ def render_leaderboard(data: dict) -> None:
     fmt = {k: v for k, v in fmt.items() if k in display_df.columns}
     styler = display_df.style.apply(_style_row, axis=1).format(fmt, na_rep="—")
     st.dataframe(styler, hide_index=True, use_container_width=True)
-    st.caption("👑 green = projected leader · ⭐ blue = you · 🔁 = hitter scored in a P slot (Ohtani-type) · ⛔ = DNP (0)")
+    st.caption("👑 green = projected leader · ⭐ blue = you · 🔁 = hitter scored in a P slot (Ohtani-type)")
 
 
 def render_pick_boards(data: dict) -> None:
