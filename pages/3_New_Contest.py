@@ -227,7 +227,10 @@ if st.button("💾 Score & save contest", type="primary", disabled=not ss.get("n
     drafters_rec = ss["nc_drafters"]
     seat_meta = {d["Seat"]: d for d in drafters_rec}
 
-    # Resolve each raw name to a player_id (creating new players / aliases).
+    # Resolve each raw name to a player_id (creating new players when chosen).
+    # We deliberately do NOT save the raw spelling as an alias — the last-name
+    # matcher resolves "F. Lastname" deterministically, and stored aliases were
+    # what previously mis-routed players.
     resolution: dict[str, int] = {}
     for name in ss["nc_names"]:
         choice = ss.get(f"nc_res_{name}", "")
@@ -238,11 +241,7 @@ if st.button("💾 Score & save contest", type="primary", disabled=not ss.get("n
                          if str(r["Player"]).strip() == name and str(r["Team"]).strip()), None)
             resolution[name] = registry.upsert_player(conn, name, team=team or None)
         else:
-            pid = cands[options.index(choice) - 1][0]
-            resolution[name] = pid
-            full = cands[options.index(choice) - 1][1]
-            if name.strip().lower() != full.strip().lower():
-                registry.add_alias(conn, pid, name)  # learn the spelling
+            resolution[name] = cands[options.index(choice) - 1][0]
 
     # Build entries grouped by seat.
     seat_entries: dict[int, dict] = {}
