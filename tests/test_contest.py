@@ -114,3 +114,27 @@ def test_active_status_and_listing(scored):
     conn, contest_id = scored
     active = contest.list_contests(conn, status="active")
     assert any(c["contest_id"] == contest_id for c in active)
+
+
+def test_resolve_uses_latest_same_date_slate(tmp_path):
+    conn = connect(tmp_path / "samedate.db")
+    early = slate_mod.create_slate(conn, "2026-07-02")   # incomplete early pull
+    late = slate_mod.create_slate(conn, "2026-07-02")    # later, complete pull
+    other = slate_mod.create_slate(conn, "2026-07-01")   # a different day
+
+    pid = registry.upsert_player(conn, "Cal Raleigh", "IF")
+    conn.execute("INSERT INTO batter_projections (slate_id, player_id, proj_pts, flags_json)"
+                 " VALUES (?, ?, ?, '[]')", (late, pid, 7.5))
+    conn.commit()
+    # A contest on the EARLY same-date slate still finds him via the later pull.
+    proj, src = contest.resolve_pick_projection(conn, early, pid, "IF")
+    assert src == "batter" and proj == 7.5
+
+    # A player who only exists on a DIFFERENT date is not borrowed -> DNP.
+    old = registry.upsert_player(conn, "Yesterday Guy", "IF")
+    conn.execute("INSERT INTO batter_projections (slate_id, player_id, proj_pts, flags_json)"
+                 " VALUES (?, ?, ?, '[]')", (other, old, 4.0))
+    conn.commit()
+    proj2, src2 = contest.resolve_pick_projection(conn, early, old, "IF")
+    assert src2 == "dnp" and proj2 == 0.0
+    conn.close()

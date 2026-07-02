@@ -19,13 +19,38 @@ HITTER_SLOTS = {"IF", "OF", "HT"}
 def resolve_pick_projection(
     conn: sqlite3.Connection, slate_id: int, player_id: int, roster_slot: str | None
 ) -> tuple[float, str]:
-    """Projection + source for one drafted player on a slate.
+    """Projection + source for one drafted player, using the *latest pull of the
+    same date* as the contest's slate.
+
+    Odds pulled early in the day are incomplete (a player's props post closer to
+    game time). By resolving against the most recent slate with the same date, a
+    fresh re-pull automatically fills in players that were missing — no need to
+    re-draft. Falls back through same-date slates newest-first, then DNP -> 0.
+    """
+    row = conn.execute("SELECT date FROM slates WHERE slate_id=?", (slate_id,)).fetchone()
+    if row is not None:
+        slate_ids = [r["slate_id"] for r in conn.execute(
+            "SELECT slate_id FROM slates WHERE date=? ORDER BY slate_id DESC", (row["date"],))]
+        if slate_id not in slate_ids:
+            slate_ids.insert(0, slate_id)
+    else:
+        slate_ids = [slate_id]
+
+    for sid in slate_ids:
+        proj, source = _resolve_in_slate(conn, sid, player_id, roster_slot)
+        if source != "dnp":
+            return proj, source
+    return 0.0, "dnp"
+
+
+def _resolve_in_slate(
+    conn: sqlite3.Connection, slate_id: int, player_id: int, roster_slot: str | None
+) -> tuple[float, str]:
+    """Resolve a player's projection within a single slate.
 
     source ∈ {"pitcher", "batter", "batter_fallback", "dnp"}.
-    - P slot: use the pitcher projection; if none exists but a batter projection
-      does, fall back to it (the Ohtani-type case); else DNP -> 0.
-    - Hitter slot: use the batter projection; (defensively fall back to a
-      pitcher projection if that's all we have); else DNP -> 0.
+    - P slot: pitcher projection; else a batter projection (Ohtani-type); else DNP.
+    - Hitter slot: batter projection; else (defensively) a pitcher projection; else DNP.
     """
     def batter() -> float | None:
         row = conn.execute(
@@ -159,22 +184,25 @@ def load_contest(conn: sqlite3.Connection, contest_id: int) -> dict:
         ).fetchall()
         picks = []
         for p in prows:
-            _proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p["roster_slot"])
+            # Resolve fresh (latest same-date pull) so re-pulling odds updates
+            # active contests without re-drafting.
+            proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p["roster_slot"])
             picks.append({
                 "overall_pick_number": p["overall_pick_number"],
                 "round_number": p["round_number"],
                 "player_id": p["player_id"],
                 "full_name": p["full_name"],
-                "player_projection": p["player_projection"],
+                "player_projection": round(proj, 2),
                 "roster_slot": p["roster_slot"],
                 "source": source,
             })
+        live_total = round(sum(pk["player_projection"] for pk in picks), 2)
         entries.append({
             "entry_id": e["entry_id"],
             "drafter_name": e["drafter_name"],
             "is_me": bool(e["is_me"]),
             "draft_slot": e["draft_slot"],
-            "projected_total": e["projected_total"],
+            "projected_total": live_total,
             "actual_total": e["actual_total"],
             "picks": picks,
             "summary": summarize_entry(picks),
