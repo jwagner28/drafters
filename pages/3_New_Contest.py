@@ -211,7 +211,10 @@ if ss.get("nc_matches"):
     for name in ss["nc_names"]:
         cands = ss["nc_matches"].get(name, [])
         options = _options_for(name)
-        default = 1 if (cands and cands[0][2] >= matching.NEEDS_CONFIRM) else 0
+        # Pre-select a match only when it's strong (right surname + initial);
+        # otherwise default to "create new" so wrong same-surname players aren't
+        # auto-picked.
+        default = 1 if (cands and cands[0][2] >= matching.STRONG_DEFAULT) else 0
         st.selectbox(f"“{name}” →", options, index=default, key=f"nc_res_{name}")
 
 # ---------------------------------------------------------------------------

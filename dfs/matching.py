@@ -15,18 +15,26 @@ last-name matching handles abbreviations directly and deterministically.
 from __future__ import annotations
 
 import sqlite3
+import unicodedata
 
 from rapidfuzz import fuzz
 
 # Combined-score thresholds (0..100). Exact last name + matching initial = 100.
 AUTO_ACCEPT = 95     # confident enough to auto-select
 NEEDS_CONFIRM = 82   # show as the suggested option, but let the user confirm
+STRONG_DEFAULT = 90  # pre-select a candidate only above this (needs surname + initial)
 
 _AUTO_LAST = 90      # last-name similarity needed to auto-accept
 _CONFIRM_LAST = 74   # last-name similarity needed to even suggest
 _MIN_LAST = 60       # below this, not the same last name at all
 
 _SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _fold(s: str) -> str:
+    """Lowercase and strip accents so 'Sánchez' == 'Sanchez' (MLB is full of
+    accented surnames; the draft board types them without accents)."""
+    return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii").lower().strip()
 
 
 def split_name(name: str) -> tuple[str | None, str]:
@@ -50,16 +58,17 @@ def split_name(name: str) -> tuple[str | None, str]:
 
 def _ranked(conn: sqlite3.Connection, raw_name: str, limit: int = 5) -> list[dict]:
     q_initial, q_last = split_name(raw_name)
-    q_last_l = q_last.lower()
-    if not q_last_l:
+    q_last_f = _fold(q_last)
+    q_init_f = _fold(q_initial) if q_initial else None
+    if not q_last_f:
         return []
     out: list[dict] = []
     for r in conn.execute("SELECT player_id, full_name FROM players"):
         p_initial, p_last = split_name(r["full_name"])
-        last_score = fuzz.ratio(q_last_l, p_last.lower())
+        last_score = fuzz.ratio(q_last_f, _fold(p_last))
         if last_score < _MIN_LAST:
             continue
-        initial_match = (q_initial is None) or (p_initial is not None and p_initial == q_initial)
+        initial_match = (q_init_f is None) or (p_initial is not None and _fold(p_initial) == q_init_f)
         score = last_score * 0.85 + (15 if initial_match else 0)
         out.append({
             "player_id": r["player_id"], "full_name": r["full_name"],

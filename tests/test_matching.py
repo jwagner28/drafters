@@ -13,6 +13,7 @@ def conn(tmp_path):
         ("Aaron Judge", "OF"), ("Bobby Witt Jr.", "IF"), ("Shohei Ohtani", ["IF", "P"]),
         ("Jacob Misiorowski", "P"), ("Juan Soto", "OF"), ("James Wood", "OF"),
         ("Will Smith", "IF"), ("Dominic Smith", "IF"), ("Pete Crow-Armstrong", "OF"),
+        ("Cristopher Sánchez", "P"), ("Gary Sánchez", "IF"), ("Teoscar Hernández", "OF"),
     ]:
         registry.upsert_player(c, name, pos)
     yield c
@@ -64,6 +65,13 @@ def test_hyphenated_last_name(conn):
 def test_ocr_typo_in_last_name_still_matches(conn):
     res = matching.match_name(conn, "J. Misiorowsi")  # missing 'k'
     assert res["full_name"] == "Jacob Misiorowski"
+
+
+def test_accent_insensitive_matching(conn):
+    # Draft boards type "Sanchez"/"Hernandez" without accents.
+    assert matching.match_name(conn, "C. Sanchez")["full_name"] == "Cristopher Sánchez"
+    assert matching.match_name(conn, "G. Sanchez")["full_name"] == "Gary Sánchez"
+    assert matching.match_name(conn, "T. Hernandez")["full_name"] == "Teoscar Hernández"
 
 
 def test_unrelated_name_is_new(conn):
