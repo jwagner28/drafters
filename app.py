@@ -19,7 +19,7 @@ st.set_page_config(page_title="MLB DFS Engine", page_icon="⚾", layout="wide")
 st.title("⚾ MLB DFS Projection & Contest Engine")
 st.caption("Local-first · 100% free · all data in one SQLite file")
 # Bump this on each deploy so you can confirm the running build after a reboot.
-st.caption("🔧 build 2026-07-02d — surname matching, accents, no DNP, live re-pull refresh")
+st.caption("🔧 build 2026-07-02e — odds source access test")
 
 st.markdown(
     """
