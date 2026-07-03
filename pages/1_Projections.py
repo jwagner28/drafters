@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dfs import config, registry, sgo
+from dfs import config, fanduel, registry, sgo
 from dfs.db import connect
 from dfs.projections import (
     REQUIRED_COLUMNS,
@@ -43,32 +43,47 @@ ss = st.session_state
 # ---------------------------------------------------------------------------
 # 1. Get props — pull live odds (SportsGameOdds) or upload a CSV
 # ---------------------------------------------------------------------------
-st.header("1. Get batter props")
+st.header("1. Get props")
 
-st.subheader("Pull live odds (SportsGameOdds)")
-if sgo.configured():
-    st.caption("Fetches **today's** MLB games (US/Eastern), **pre-match only**, and "
-               "auto-projects batters *and* pitchers.")
-    if st.button("☁️ Pull today's MLB odds", type="primary"):
-        with st.spinner("Fetching today's odds from SportsGameOdds…"):
-            try:
-                slate = sgo.pull_slate()
-                ss["props_df"] = slate["batter_df"]
-                ss["pitchers"] = [{"name": p["name"], "proj_pts": p["proj_pts"]}
-                                  for p in slate["pitchers"]]
-                # Record each player's team (fixes empty Team columns elsewhere).
-                for nm, tm in slate["player_teams"].items():
-                    if tm:
-                        registry.upsert_player(conn, nm, team=tm)
-                n_bat = slate["batter_df"]["player"].nunique() if not slate["batter_df"].empty else 0
-                st.success(f"Pulled {slate['n_games']} games · {n_bat} batters · "
-                           f"{len(slate['pitchers'])} pitchers (auto-projected).")
-            except Exception as e:  # noqa: BLE001
-                st.error("Odds pull failed — full error below.")
-                st.exception(e)
-else:
-    st.info("Set **SGO_API_KEY** (Streamlit secrets or env var) to pull live odds. "
-            "You can also upload a CSV below.")
+st.subheader("Pull live odds")
+st.caption("Batter props from **FanDuel** (full slate coverage, real over-the-line "
+           "ladders); pitcher projections from **SportsGameOdds**. Today's MLB games "
+           "(US/Eastern), **pre-match only**.")
+if st.button("☁️ Pull today's MLB odds", type="primary"):
+    with st.spinner("Fetching FanDuel batter props + SGO pitcher projections…"):
+        try:
+            fd = fanduel.pull_batters()
+            ss["props_df"] = fd["batter_df"]
+            teams = dict(fd["player_teams"])
+            n_bat = fd["batter_df"]["player"].nunique() if not fd["batter_df"].empty else 0
+
+            # Pitcher projections from SGO (best-effort — batters don't depend on it).
+            pitchers: list[dict] = []
+            pitch_note = ""
+            if sgo.configured():
+                try:
+                    slate = sgo.pull_slate()
+                    pitchers = [{"name": p["name"], "proj_pts": p["proj_pts"]}
+                                for p in slate["pitchers"]]
+                    for nm, tm in slate["player_teams"].items():
+                        if tm and nm not in teams:  # add pitcher teams
+                            teams[nm] = tm
+                except Exception as e:  # noqa: BLE001
+                    pitch_note = f"  ⚠️ pitcher pull failed: {e}"
+            else:
+                pitch_note = "  (set SGO_API_KEY to auto-project pitchers)"
+            ss["pitchers"] = pitchers
+
+            # Record each player's team (fixes empty Team columns elsewhere).
+            for nm, tm in teams.items():
+                if tm:
+                    registry.upsert_player(conn, nm, team=tm)
+
+            st.success(f"Pulled {fd['n_games']} games · {n_bat} batters (FanDuel) · "
+                       f"{len(pitchers)} pitchers (SGO).{pitch_note}")
+        except Exception as e:  # noqa: BLE001
+            st.error("Odds pull failed — full error below.")
+            st.exception(e)
 
 with st.expander("…or upload a props CSV / use sample data"):
     st.caption(

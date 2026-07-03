@@ -27,10 +27,11 @@ _HEADERS = {
 }
 
 TARGETS = {
+    "FanDuel MLB (ON) — the one we USE": (
+        "https://sbapi.on.sportsbook.fanduel.ca/api/content-managed-page"
+        "?page=CUSTOM&customPageId=mlb&_ak=FhMFpcPWXMeyZxOx&timezone=America%2FToronto"
+    ),
     "DraftKings MLB (nash)": "https://sportsbook-nash.draftkings.com/api/sportscontent/dkusva/v1/leagues/84240",
-    "DraftKings MLB (v5)": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/84240?format=json",
-    "FanDuel MLB (va)": "https://sbapi.va.fanduel.com/api/content-managed-page?page=CUSTOM&customPageId=mlb",
-    "FanDuel MLB (pa)": "https://sbapi.pa.fanduel.com/api/content-managed-page?page=CUSTOM&customPageId=mlb",
     "Control — MLB StatsAPI": "https://statsapi.mlb.com/api/v1/teams?sportId=1",
 }
 
