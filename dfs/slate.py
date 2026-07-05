@@ -23,6 +23,32 @@ def create_slate(conn: sqlite3.Connection, date: str | None = None, notes: str |
     return int(cur.lastrowid)
 
 
+def get_daily_slate(conn: sqlite3.Connection, date: str) -> int | None:
+    """The slate id for a date if one exists (most recent), else None. No create."""
+    row = conn.execute(
+        "SELECT slate_id FROM slates WHERE date=? ORDER BY slate_id DESC LIMIT 1", (date,)
+    ).fetchone()
+    return int(row["slate_id"]) if row is not None else None
+
+
+def get_or_create_daily_slate(
+    conn: sqlite3.Connection, date: str | None = None, notes: str | None = None
+) -> int:
+    """Return THE slate for a date, creating it once if needed.
+
+    Enforces "one projections page per day": all pulls for a date merge into the
+    same slate rather than spawning a new one each time. If several slates already
+    exist for the date (from older versions), the most recent is reused.
+    """
+    date = date or date_cls.today().isoformat()
+    row = conn.execute(
+        "SELECT slate_id FROM slates WHERE date=? ORDER BY slate_id DESC LIMIT 1", (date,)
+    ).fetchone()
+    if row is not None:
+        return int(row["slate_id"])
+    return create_slate(conn, date, notes)
+
+
 def ensure_players(conn: sqlite3.Connection, names: list[str]) -> dict[str, int]:
     """Make sure every name has a registry row; return name -> player_id.
 
@@ -84,6 +110,49 @@ def save_batter_projections(
         )
     conn.commit()
     return ids
+
+
+def merge_batter_projections(
+    conn: sqlite3.Connection,
+    slate_id: int,
+    projections: list[BatterProjection],
+) -> dict[str, int]:
+    """Upsert batter projections WITHOUT deleting players missing from this pull.
+
+    Used by the "Update batter props" button: refresh the players that still have
+    props, but leave players whose game already started (and so dropped out of the
+    odds feed) at their last-known projection. Returns name -> player_id.
+    """
+    names = [p.player for p in projections]
+    ids = ensure_players(conn, names)
+    for p in projections:
+        pid = ids[p.player]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO batter_projections
+                (slate_id, player_id, proj_pts, e_r, e_1b, e_2b, e_3b, e_hr, e_rbi, e_sb, e_bb,
+                 game, game_time_et, flags_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slate_id, pid, p.proj_pts, p.e_r, p.e_1b, p.e_2b, p.e_3b, p.e_hr,
+                p.e_rbi, p.e_sb, getattr(p, "e_bb", None), p.game, p.game_time,
+                json.dumps(p.flags),
+            ),
+        )
+    conn.commit()
+    return ids
+
+
+def slate_counts(conn: sqlite3.Connection, slate_id: int) -> dict[str, int]:
+    """How many batters / pitchers are stored for a slate."""
+    nb = conn.execute(
+        "SELECT COUNT(*) AS n FROM batter_projections WHERE slate_id=?", (slate_id,)
+    ).fetchone()["n"]
+    np_ = conn.execute(
+        "SELECT COUNT(*) AS n FROM pitcher_projections WHERE slate_id=?", (slate_id,)
+    ).fetchone()["n"]
+    return {"batters": int(nb), "pitchers": int(np_)}
 
 
 def save_pitcher_projection(

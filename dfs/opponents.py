@@ -72,7 +72,115 @@ def recompute_from_contests(conn: sqlite3.Connection) -> None:
 
 
 def list_opponents(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Opponents with any activity — drafted contests OR manually-entered totals."""
     return conn.execute(
-        "SELECT * FROM opponents WHERE contests_played > 0"
+        "SELECT * FROM opponents"
+        " WHERE contests_played > 0 OR manual_games IS NOT NULL OR manual_winnings IS NOT NULL"
         " ORDER BY contests_played DESC, name"
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Manually-tracked totals + dated match history
+# ---------------------------------------------------------------------------
+def add_opponent(
+    conn: sqlite3.Connection, name: str,
+    winnings: float | None = None, games: int | None = None,
+) -> sqlite3.Row:
+    """Add a brand-new opponent (perhaps not yet drafted against) and optionally
+    record their lifetime totals."""
+    opp = get_or_create_opponent(conn, name.strip())
+    if winnings is not None or games is not None:
+        set_opponent_totals(conn, name.strip(), winnings, games)
+    return get_or_create_opponent(conn, name.strip())
+
+
+def set_opponent_totals(
+    conn: sqlite3.Connection, name: str,
+    winnings: float | None = None, games: int | None = None,
+) -> None:
+    """Set an opponent's user-entered lifetime winnings / games played."""
+    opp = get_or_create_opponent(conn, name.strip())
+    conn.execute(
+        "UPDATE opponents SET manual_winnings=?, manual_games=? WHERE opponent_id=?",
+        (winnings, games, opp["opponent_id"]),
+    )
+    conn.commit()
+
+
+def rename_opponent(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+    """Rename an opponent, fixing the name everywhere it's referenced.
+
+    If the new name already exists, the two are merged: contest entries and
+    history ranges move onto the surviving row and the duplicate is removed.
+    """
+    old_name, new_name = old_name.strip(), new_name.strip()
+    if not new_name or old_name == new_name:
+        return
+    old = conn.execute("SELECT * FROM opponents WHERE name=?", (old_name,)).fetchone()
+    if old is None:
+        return
+    conn.execute("UPDATE contest_entries SET drafter_name=? WHERE drafter_name=?", (new_name, old_name))
+
+    existing = conn.execute("SELECT * FROM opponents WHERE name=?", (new_name,)).fetchone()
+    if existing is None:
+        conn.execute("UPDATE opponents SET name=? WHERE opponent_id=?", (new_name, old["opponent_id"]))
+        conn.commit()
+    else:
+        # Merge into the existing row: move history, keep its manual totals unless
+        # empty (then adopt the old row's).
+        conn.execute("UPDATE opponent_history SET opponent_id=? WHERE opponent_id=?",
+                     (existing["opponent_id"], old["opponent_id"]))
+        if existing["manual_winnings"] is None and existing["manual_games"] is None:
+            conn.execute("UPDATE opponents SET manual_winnings=?, manual_games=? WHERE opponent_id=?",
+                         (old["manual_winnings"], old["manual_games"], existing["opponent_id"]))
+        conn.execute("DELETE FROM opponents WHERE opponent_id=?", (old["opponent_id"],))
+        conn.commit()
+    recompute_from_contests(conn)
+
+
+def add_history_range(
+    conn: sqlite3.Connection, name: str, start_date: str | None, end_date: str | None,
+    wins: int, losses: int, winnings: float, note: str | None = None,
+) -> int:
+    """Record an opponent's record + winnings over a date range."""
+    opp = get_or_create_opponent(conn, name.strip())
+    now = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO opponent_history"
+        " (opponent_id, start_date, end_date, wins, losses, winnings, note, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (opp["opponent_id"], start_date, end_date, int(wins), int(losses),
+         float(winnings), note, now),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_history_ranges(conn: sqlite3.Connection, name: str) -> list[sqlite3.Row]:
+    """An opponent's dated history ranges, newest first."""
+    return conn.execute(
+        "SELECT h.* FROM opponent_history h"
+        " JOIN opponents o ON o.opponent_id = h.opponent_id"
+        " WHERE o.name=?"
+        " ORDER BY COALESCE(h.end_date, h.start_date) DESC, h.history_id DESC",
+        (name.strip(),),
+    ).fetchall()
+
+
+def delete_history_range(conn: sqlite3.Connection, history_id: int) -> None:
+    conn.execute("DELETE FROM opponent_history WHERE history_id=?", (history_id,))
+    conn.commit()
+
+
+def aggregate_history(conn: sqlite3.Connection, name: str) -> dict:
+    """Totals summed across an opponent's dated history ranges."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(h.wins),0) AS w, COALESCE(SUM(h.losses),0) AS l,"
+        " COALESCE(SUM(h.winnings),0) AS win, COUNT(*) AS n"
+        " FROM opponent_history h JOIN opponents o ON o.opponent_id=h.opponent_id"
+        " WHERE o.name=?",
+        (name.strip(),),
+    ).fetchone()
+    return {"wins": int(row["w"]), "losses": int(row["l"]),
+            "winnings": float(row["win"]), "ranges": int(row["n"])}

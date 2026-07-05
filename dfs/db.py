@@ -101,6 +101,10 @@ CREATE TABLE IF NOT EXISTS draft_picks (
     slot_in_round       INTEGER,
     player_id           INTEGER REFERENCES players(player_id),
     player_projection   REAL,
+    -- Manual per-pick projection override (NULL = use the resolved projection).
+    proj_override       REAL,
+    -- How player_projection was resolved: batter/pitcher/batter_fallback/dnp.
+    proj_source         TEXT,
     roster_slot         TEXT
 );
 
@@ -111,8 +115,25 @@ CREATE TABLE IF NOT EXISTS opponents (
     h2h_losses      INTEGER NOT NULL DEFAULT 0,
     contests_played INTEGER NOT NULL DEFAULT 0,
     avg_actual_score REAL,
+    -- User-entered lifetime totals (independent of drafted contests).
+    manual_winnings REAL,
+    manual_games    INTEGER,
     tendencies_json TEXT NOT NULL DEFAULT '{}',
     last_updated    TEXT
+);
+
+-- User-entered win/loss + winnings for an opponent over a date range. Many
+-- ranges can be added over time; the page aggregates them.
+CREATE TABLE IF NOT EXISTS opponent_history (
+    history_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    opponent_id INTEGER NOT NULL REFERENCES opponents(opponent_id) ON DELETE CASCADE,
+    start_date  TEXT,
+    end_date    TEXT,
+    wins        INTEGER NOT NULL DEFAULT 0,
+    losses      INTEGER NOT NULL DEFAULT 0,
+    winnings    REAL NOT NULL DEFAULT 0,
+    note        TEXT,
+    created_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS substitutions (
@@ -190,3 +211,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "e_bb" not in bp_cols:
         conn.execute("ALTER TABLE batter_projections ADD COLUMN e_bb REAL")
         conn.commit()
+
+    # Per-pick manual override + stored resolution source (so re-pulling/refresh
+    # never zeroes a pick whose game already started).
+    dp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(draft_picks)")}
+    for col, decl in (("proj_override", "REAL"), ("proj_source", "TEXT")):
+        if col not in dp_cols:
+            conn.execute(f"ALTER TABLE draft_picks ADD COLUMN {col} {decl}")
+    conn.commit()
+
+    # User-entered opponent lifetime totals.
+    opp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(opponents)")}
+    for col, decl in (("manual_winnings", "REAL"), ("manual_games", "INTEGER")):
+        if col not in opp_cols:
+            conn.execute(f"ALTER TABLE opponents ADD COLUMN {col} {decl}")
+    conn.commit()

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from dfs import boards_ui, contest as contest_mod
+from dfs import boards_ui, contest as contest_mod, matching, registry
 from dfs.db import connect
 
 st.set_page_config(page_title="Active Contests", page_icon="📋", layout="wide")
@@ -52,17 +52,91 @@ else:
     m4.metric("Projected leader", leader["drafter_name"] if leader else "—")
 
 st.divider()
+rc1, rc2 = st.columns([3, 2])
+rc1.caption("Pull the latest projections from this day's slate into the contest. "
+            "Players whose game already started keep their last projection (never zeroed).")
+if rc2.button("🔄 Update projections from slate", use_container_width=True):
+    res = contest_mod.refresh_contest_projections(conn, contest_id)
+    st.success(f"Refreshed: {res['updated']} updated, {res['kept']} kept "
+               f"(game started), across {res['entries']} entries.")
+    st.rerun()
+
+st.divider()
 boards_ui.render_contest(data)
+
+# ---------------------------------------------------------------------------
+# Edit picks — fix a name or override a projection
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("✏️ Edit picks")
+entry_by_label = {
+    (e["drafter_name"] or f"Seat {e['draft_slot']}") + (" ⭐" if e["is_me"] else ""): e
+    for e in data["entries"]
+}
+ec1, ec2 = st.columns([2, 4])
+edit_entry_label = ec1.selectbox("Entry", list(entry_by_label.keys()), key="edit_entry")
+edit_entry = entry_by_label[edit_entry_label]
+
+# Rename this drafter.
+new_drafter = ec2.text_input("Rename drafter", value=edit_entry["drafter_name"] or "",
+                             key=f"edit_drafter_{edit_entry['entry_id']}")
+if ec2.button("Save drafter name") and new_drafter.strip():
+    contest_mod.rename_entry_drafter(conn, edit_entry["entry_id"], new_drafter)
+    st.success("Drafter renamed.")
+    st.rerun()
+
+edit_pick_by_label = {
+    f"#{p['overall_pick_number']} {p['roster_slot'] or ''} — {p['full_name']} "
+    f"({p['player_projection']:.2f}{' ✎' if p.get('overridden') else ''})": p
+    for p in edit_entry["picks"]
+}
+if not edit_pick_by_label:
+    st.info("This entry has no picks.")
+else:
+    edit_pick_label = st.selectbox("Pick", list(edit_pick_by_label.keys()), key="edit_pick")
+    epick = edit_pick_by_label[edit_pick_label]
+
+    fx1, fx2 = st.columns(2)
+    # --- Fix player name -----------------------------------------------------
+    with fx1:
+        st.markdown("**Fix player name**")
+        typed = st.text_input("Correct name", value=epick["full_name"], key=f"fix_name_{epick['pick_id']}")
+        cands = matching.best_matches(conn, typed, 5) if typed.strip() else []
+        fix_options = [f"➕ Create/keep: {typed.strip()}"] + [
+            f"{full}  ({score:.0f})" for _pid, full, score in cands]
+        fix_choice = st.selectbox("Resolve to", fix_options, key=f"fix_choice_{epick['pick_id']}")
+        if st.button("Apply name fix"):
+            if fix_choice.startswith("➕") or fix_choice not in fix_options:
+                new_pid = registry.upsert_player(conn, typed.strip())
+            else:
+                new_pid = cands[fix_options.index(fix_choice) - 1][0]
+            contest_mod.set_pick_player(conn, epick["pick_id"], new_pid)
+            st.success("Player updated.")
+            st.rerun()
+
+    # --- Manual projection override -----------------------------------------
+    with fx2:
+        st.markdown("**Manual projection**")
+        st.caption("Sticky — survives 'Update projections from slate'.")
+        ov = st.number_input("Projection", min_value=0.0,
+                             value=float(epick["player_projection"]), step=0.5,
+                             key=f"ov_val_{epick['pick_id']}")
+        ob1, ob2 = st.columns(2)
+        if ob1.button("Set override"):
+            contest_mod.set_pick_override(conn, epick["pick_id"], ov)
+            st.success("Override set.")
+            st.rerun()
+        if ob2.button("Clear override", disabled=not epick.get("overridden")):
+            contest_mod.set_pick_override(conn, epick["pick_id"], None)
+            contest_mod.refresh_contest_projections(conn, contest_id)
+            st.success("Override cleared; re-resolved from slate.")
+            st.rerun()
 
 # ---------------------------------------------------------------------------
 # Substitution
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("🔁 Substitute a player")
-entry_by_label = {
-    (e["drafter_name"] or f"Seat {e['draft_slot']}") + (" ⭐" if e["is_me"] else ""): e
-    for e in data["entries"]
-}
 sc1, sc2, sc3 = st.columns([2, 3, 3])
 entry_label = sc1.selectbox("Entry", list(entry_by_label.keys()), key="sub_entry")
 entry = entry_by_label[entry_label]
@@ -76,10 +150,7 @@ if not pick_by_label:
 else:
     pick_label = sc2.selectbox("Pick to replace", list(pick_by_label.keys()), key="sub_pick")
     pick = pick_by_label[pick_label]
-    pick_id = conn.execute(
-        "SELECT pick_id FROM draft_picks WHERE entry_id=? AND overall_pick_number=?",
-        (entry["entry_id"], pick["overall_pick_number"]),
-    ).fetchone()["pick_id"]
+    pick_id = pick["pick_id"]
 
     options = contest_mod.slate_player_options(conn, c["slate_id"])
     repl_by_label = {f"{name} ({kind})": pid for pid, name, kind in options}

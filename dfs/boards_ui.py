@@ -11,7 +11,8 @@ import streamlit as st
 
 # No DNP badge — a player without a projection in the slate just shows 0; check
 # the site's lineup for actual scratches.
-SOURCE_FLAG = {"dnp": "", "batter_fallback": "🔁 bat", "pitcher": "", "batter": ""}
+SOURCE_FLAG = {"dnp": "", "batter_fallback": "🔁 bat", "pitcher": "", "batter": "",
+               "manual": "✎"}
 
 
 def render_leaderboard(data: dict) -> None:

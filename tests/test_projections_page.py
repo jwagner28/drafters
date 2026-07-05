@@ -1,12 +1,15 @@
 """Headless render test for the Projections page (position-editor grid)."""
 
+import datetime as _dt
 import os
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from dfs import slate as slate_mod
 from dfs.db import connect
+from dfs.projections import compute_projections
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "pages" / "1_Projections.py"
@@ -22,10 +25,15 @@ def test_projections_page_renders_position_editor(tmp_path):
         st.cache_resource.clear()
     except Exception:
         pass
-    connect(tmp_path / "proj.db").close()
+
+    # Seed today's slate with batters (the page reads the slate from the DB).
+    conn = connect(tmp_path / "proj.db")
+    projs = compute_projections(pd.read_csv(SAMPLE_CSV))
+    sid = slate_mod.get_or_create_daily_slate(conn, _dt.date.today().isoformat())
+    slate_mod.merge_batter_projections(conn, sid, projs)
+    conn.close()
 
     at = AppTest.from_file(str(PAGE), default_timeout=60)
-    at.session_state["props_df"] = pd.read_csv(SAMPLE_CSV)
     at.run()
     assert not at.exception
     # The editable position grid + projection table both render as data editors/frames.

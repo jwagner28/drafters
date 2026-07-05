@@ -120,15 +120,16 @@ def save_contest(
         entry_id = int(ecur.lastrowid)
         total = 0.0
         for p in e.get("picks", []):
-            proj, _source = resolve_pick_projection(conn, slate_id, p["player_id"], p.get("roster_slot"))
+            proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p.get("roster_slot"))
             conn.execute(
                 "INSERT INTO draft_picks"
                 " (contest_id, entry_id, overall_pick_number, round_number, slot_in_round,"
-                "  player_id, player_projection, roster_slot)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "  player_id, player_projection, proj_source, roster_slot)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     contest_id, entry_id, p["overall_pick_number"], p.get("round_number"),
-                    p.get("slot_in_round"), p["player_id"], round(proj, 2), p.get("roster_slot"),
+                    p.get("slot_in_round"), p["player_id"], round(proj, 2), source,
+                    p.get("roster_slot"),
                 ),
             )
             total += proj
@@ -184,10 +185,19 @@ def load_contest(conn: sqlite3.Connection, contest_id: int) -> dict:
         ).fetchall()
         picks = []
         for p in prows:
-            # Resolve fresh (latest same-date pull) so re-pulling odds updates
-            # active contests without re-drafting.
-            proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p["roster_slot"])
+            override = p["proj_override"]
+            if override is not None:
+                # Manual override wins and is sticky across refreshes.
+                proj, source = float(override), "manual"
+            elif p["proj_source"] is not None:
+                # Stored value — set by save/refresh. NOT re-resolved live, so a
+                # player whose game started (props gone) keeps their projection.
+                proj, source = float(p["player_projection"] or 0.0), p["proj_source"]
+            else:
+                # Legacy pick saved before proj_source existed — resolve once.
+                proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p["roster_slot"])
             picks.append({
+                "pick_id": p["pick_id"],
                 "overall_pick_number": p["overall_pick_number"],
                 "round_number": p["round_number"],
                 "player_id": p["player_id"],
@@ -195,6 +205,7 @@ def load_contest(conn: sqlite3.Connection, contest_id: int) -> dict:
                 "player_projection": round(proj, 2),
                 "roster_slot": p["roster_slot"],
                 "source": source,
+                "overridden": override is not None,
             })
         live_total = round(sum(pk["player_projection"] for pk in picks), 2)
         entries.append({
@@ -257,23 +268,18 @@ def substitute_player(
     slate_id = contest["slate_id"]
 
     out_player_id = pick["player_id"]
-    old_proj = float(pick["player_projection"] or 0.0)
-    new_proj, _src = resolve_pick_projection(conn, slate_id, in_player_id, pick["roster_slot"])
+    old_proj = float(pick["proj_override"] if pick["proj_override"] is not None
+                     else (pick["player_projection"] or 0.0))
+    new_proj, src = resolve_pick_projection(conn, slate_id, in_player_id, pick["roster_slot"])
     new_proj = round(new_proj, 2)
     delta = round(new_proj - old_proj, 2)
 
     conn.execute(
-        "UPDATE draft_picks SET player_id=?, player_projection=? WHERE pick_id=?",
-        (in_player_id, new_proj, pick_id),
+        "UPDATE draft_picks SET player_id=?, player_projection=?, proj_source=?,"
+        " proj_override=NULL WHERE pick_id=?",
+        (in_player_id, new_proj, src, pick_id),
     )
-    total = conn.execute(
-        "SELECT COALESCE(SUM(player_projection),0) AS t FROM draft_picks WHERE entry_id=?",
-        (entry_id,),
-    ).fetchone()["t"]
-    conn.execute(
-        "UPDATE contest_entries SET projected_total=? WHERE entry_id=?",
-        (round(float(total), 2), entry_id),
-    )
+    _recompute_entry_total(conn, entry_id)
     conn.execute(
         "INSERT INTO substitutions (contest_id, entry_id, out_player_id, in_player_id, reason, delta)"
         " VALUES (?, ?, ?, ?, ?, ?)",
@@ -281,6 +287,103 @@ def substitute_player(
     )
     conn.commit()
     return delta
+
+
+def _recompute_entry_total(conn: sqlite3.Connection, entry_id: int) -> None:
+    """Set an entry's projected_total to the sum of effective pick projections
+    (manual override where present, else the stored projection)."""
+    total = conn.execute(
+        "SELECT COALESCE(SUM(COALESCE(proj_override, player_projection)), 0) AS t"
+        " FROM draft_picks WHERE entry_id=?",
+        (entry_id,),
+    ).fetchone()["t"]
+    conn.execute(
+        "UPDATE contest_entries SET projected_total=? WHERE entry_id=?",
+        (round(float(total), 2), entry_id),
+    )
+    conn.commit()
+
+
+def refresh_contest_projections(conn: sqlite3.Connection, contest_id: int) -> dict:
+    """Re-resolve every pick from the latest same-date slate pull.
+
+    Picks with a manual override are left alone. For the rest: if a fresh
+    projection exists it's stored; if the player has dropped out of the odds feed
+    (game started) BUT already had a non-zero projection, the old value is KEPT
+    (never zeroed). Returns {updated, kept, contests_entries}.
+    """
+    contest = conn.execute("SELECT slate_id FROM contests WHERE contest_id=?", (contest_id,)).fetchone()
+    if contest is None:
+        raise ValueError(f"No contest {contest_id}")
+    slate_id = contest["slate_id"]
+
+    picks = conn.execute(
+        "SELECT * FROM draft_picks WHERE contest_id=?", (contest_id,)
+    ).fetchall()
+    updated = kept = 0
+    entry_ids = set()
+    for p in picks:
+        entry_ids.add(p["entry_id"])
+        if p["proj_override"] is not None:
+            continue  # sticky manual value
+        proj, source = resolve_pick_projection(conn, slate_id, p["player_id"], p["roster_slot"])
+        if source != "dnp":
+            conn.execute(
+                "UPDATE draft_picks SET player_projection=?, proj_source=? WHERE pick_id=?",
+                (round(proj, 2), source, p["pick_id"]),
+            )
+            updated += 1
+        elif float(p["player_projection"] or 0.0) > 0:
+            kept += 1  # game started / props gone — keep last-known, don't zero
+        else:
+            conn.execute(
+                "UPDATE draft_picks SET player_projection=0, proj_source='dnp' WHERE pick_id=?",
+                (p["pick_id"],),
+            )
+    for eid in entry_ids:
+        _recompute_entry_total(conn, eid)
+    conn.commit()
+    return {"updated": updated, "kept": kept, "entries": len(entry_ids)}
+
+
+def set_pick_override(conn: sqlite3.Connection, pick_id: int, value: float | None) -> None:
+    """Manually set (or clear, with None) a pick's projection. Overrides are
+    sticky — they survive `refresh_contest_projections`."""
+    row = conn.execute("SELECT entry_id FROM draft_picks WHERE pick_id=?", (pick_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"No pick {pick_id}")
+    conn.execute(
+        "UPDATE draft_picks SET proj_override=? WHERE pick_id=?",
+        (None if value is None else round(float(value), 2), pick_id),
+    )
+    _recompute_entry_total(conn, row["entry_id"])
+
+
+def set_pick_player(conn: sqlite3.Connection, pick_id: int, player_id: int) -> None:
+    """Repoint a pick at a different registry player (fix an OCR/name mistake)
+    and re-resolve its projection. Any manual override is cleared."""
+    pick = conn.execute("SELECT * FROM draft_picks WHERE pick_id=?", (pick_id,)).fetchone()
+    if pick is None:
+        raise ValueError(f"No pick {pick_id}")
+    contest = conn.execute(
+        "SELECT slate_id FROM contests WHERE contest_id=?", (pick["contest_id"],)
+    ).fetchone()
+    proj, source = resolve_pick_projection(conn, contest["slate_id"], player_id, pick["roster_slot"])
+    conn.execute(
+        "UPDATE draft_picks SET player_id=?, player_projection=?, proj_source=?,"
+        " proj_override=NULL WHERE pick_id=?",
+        (player_id, round(proj, 2), source, pick_id),
+    )
+    _recompute_entry_total(conn, pick["entry_id"])
+
+
+def rename_entry_drafter(conn: sqlite3.Connection, entry_id: int, new_name: str) -> None:
+    """Rename the drafter on one contest entry."""
+    conn.execute(
+        "UPDATE contest_entries SET drafter_name=? WHERE entry_id=?",
+        (new_name.strip(), entry_id),
+    )
+    conn.commit()
 
 
 def settle_contest(
